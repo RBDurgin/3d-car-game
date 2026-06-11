@@ -21,6 +21,19 @@ python3 -m http.server 8517
 
 or `npx serve`, `php -S localhost:8517`, etc.
 
+## Deploying
+
+The game is a zero-build static site, so it deploys to
+[Vercel](https://vercel.com) as-is: import this repo at
+[vercel.com/new](https://vercel.com/new), pick the **Other** framework preset,
+leave the build command and output directory empty, and deploy. Every push to
+`main` then auto-deploys, and pull requests get preview URLs. The included
+`vercel.json` only adds an immutable cache header for the vendored
+`three.module.js`.
+
+<!-- Live: https://<project>.vercel.app -->
+
+
 > Note: port 8517 is deliberately uncommon. If you serve on a popular port
 > (8000, 8080, 3000) inside a dev container, an app on the host machine may
 > already own it — the browser then hangs on that app instead of reaching
