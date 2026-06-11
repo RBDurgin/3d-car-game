@@ -291,6 +291,97 @@ const aiSpeedTable = new Float32Array(N);
   scene.add(stand);
 }
 
+// Sponsor billboards along the straights. CDA ("Charles' Discount Auto") is
+// the main sponsor, so it shows up twice as often as the filler brands.
+{
+  const sponsorTextures = [
+    // CDA — classic white design
+    canvasTexture(512, 256, (ctx, w, h) => {
+      ctx.fillStyle = '#f4f0e6'; ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#b3252b';
+      ctx.fillRect(0, 0, w, 14);
+      ctx.fillRect(0, h - 14, w, 14);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#16306e';
+      ctx.font = 'bold 122px sans-serif';
+      ctx.fillText('CDA', w / 2, 126);
+      ctx.fillStyle = '#b3252b';
+      ctx.font = 'bold 34px sans-serif';
+      ctx.fillText("CHARLES' DISCOUNT AUTO", w / 2, 176);
+      ctx.fillStyle = '#444';
+      ctx.font = 'italic 26px sans-serif';
+      ctx.fillText('Deals you can race home about', w / 2, 218);
+    }),
+    // CDA — red variant
+    canvasTexture(512, 256, (ctx, w, h) => {
+      ctx.fillStyle = '#b3252b'; ctx.fillRect(0, 0, w, h);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 46px sans-serif';
+      ctx.fillText("CHARLES' DISCOUNT", w / 2, 86);
+      ctx.fillText('AUTO', w / 2, 140);
+      ctx.fillStyle = '#ffd84d';
+      ctx.font = 'bold 36px sans-serif';
+      ctx.fillText('0% DOWN. 100% FUN.', w / 2, 206);
+    }),
+    // filler: tyre brand
+    canvasTexture(512, 256, (ctx, w, h) => {
+      ctx.fillStyle = '#1c1c20'; ctx.fillRect(0, 0, w, h);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#f2a516';
+      ctx.font = 'bold 72px sans-serif';
+      ctx.fillText('APEX TYRES', w / 2, 122);
+      ctx.fillStyle = '#ddd';
+      ctx.font = '30px sans-serif';
+      ctx.fillText('Grip you can trust', w / 2, 186);
+    }),
+    // filler: soft drink
+    canvasTexture(512, 256, (ctx, w, h) => {
+      ctx.fillStyle = '#0e5a8a'; ctx.fillRect(0, 0, w, h);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 76px sans-serif';
+      ctx.fillText('NITRO COLA', w / 2, 124);
+      ctx.fillStyle = '#9fdcff';
+      ctx.font = 'italic 30px sans-serif';
+      ctx.fillText('Fuel for the fans', w / 2, 188);
+    }),
+  ];
+  const order = [0, 1, 2, 0, 1, 3];   // CDA, CDA, filler, repeat
+
+  const postGeo = new THREE.CylinderGeometry(0.22, 0.22, 5.5, 8);
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x555a60, roughness: 0.7 });
+  const panelGeo = new THREE.BoxGeometry(11, 4.5, 0.25);
+  const backMat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.8 });
+
+  let made = 0;
+  for (let i = 60; i < N - 40; i += 56) {
+    // billboards read best on straights — skip spots where the track bends
+    if (tangents[i].dot(tangents[(i + 24) % N]) < 0.94) continue;
+    const side = made % 2 ? -1 : 1;   // alternate sides of the road
+    const board = new THREE.Group();
+    for (const px of [-4.6, 4.6]) {
+      const post = new THREE.Mesh(postGeo, postMat);
+      post.position.set(px, 2.75, -0.2);
+      post.castShadow = true;
+      board.add(post);
+    }
+    const faceMat = new THREE.MeshStandardMaterial({
+      map: sponsorTextures[order[made % order.length]], roughness: 0.6,
+    });
+    const panel = new THREE.Mesh(panelGeo,
+      [backMat, backMat, backMat, backMat, faceMat, backMat]);
+    panel.position.y = 4.8;
+    panel.castShadow = true;
+    board.add(panel);
+    board.position.copy(samples[i]).addScaledVector(lefts[i], side * (ROAD_HALF + 7));
+    // face oncoming traffic, toed in slightly toward the road
+    board.rotation.y = Math.atan2(-tangents[i].x, -tangents[i].z) + side * 0.28;
+    scene.add(board);
+    made++;
+  }
+}
+
 // ---------------------------------------------------------------- cars
 function buildCar(bodyColor) {
   const group = new THREE.Group();
