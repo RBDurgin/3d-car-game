@@ -15,6 +15,7 @@
   #speedo { right: 24px; bottom: 20px; text-align: right; }
   #speedo .num { font-size: 56px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
   #speedo .unit { font-size: 14px; letter-spacing: 2px; opacity: .8; }
+  #speedo .nitro { font-size: 20px; letter-spacing: 4px; color: #38d6ff; margin-top: 4px; }
 
   #raceinfo { left: 24px; top: 18px; font-size: 16px; }
   #raceinfo .big { font-size: 30px; font-weight: 800; }
@@ -55,6 +56,7 @@
 <div id="speedo" class="hud">
   <div class="num" id="speed">0</div>
   <div class="unit">KM/H</div>
+  <div class="nitro" id="nitro">◇◇◇</div>
 </div>
 
 <canvas id="minimap" width="170" height="170"></canvas>
@@ -70,7 +72,7 @@
 
 <div id="help" class="hud">
   <b>W/↑</b> gas &nbsp; <b>S/↓</b> brake/reverse &nbsp; <b>A·D/←·→</b> steer &nbsp;
-  <b>Space</b> handbrake &nbsp; <b>C</b> camera &nbsp; <b>R</b> reset car &nbsp; <b>M</b> sound
+  <b>Space</b> handbrake &nbsp; <b>Shift</b> nitro &nbsp; <b>C</b> camera &nbsp; <b>R</b> reset car &nbsp; <b>M</b> sound
 </div>
 
 <div id="fatal" class="hud" style="left:50%;top:50%;transform:translate(-50%,-50%);

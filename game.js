@@ -9,6 +9,9 @@ const ROAD_HALF = 8;          // half-width of the asphalt, metres
 const N = 800;                // track centerline sample count
 const AI_COUNT = 4;
 const PLAYER_MAX_SPEED = 53;  // m/s (~190 km/h)
+const NITRO_MAX = 3;          // charges the player can bank
+const NITRO_TIME = 2.6;       // seconds of boost per charge
+const NITRO_TOP_SPEED = 70;   // m/s while boosting
 
 const clamp = THREE.MathUtils.clamp;
 const lerp = THREE.MathUtils.lerp;
@@ -457,6 +460,7 @@ const player = {
   trackIdx: 0, lateral: 0, crossings: 0, passedHalf: false,
   progress: 0, lap: 1, finished: false, finishTime: 0,
   lapStart: 0, lastLap: 0, bestLap: 0, wheelSpin: 0, steerVis: 0,
+  nitro: 0, boostT: 0, slickT: 0, slickSpin: 0,
 };
 scene.add(player.group);
 
@@ -517,6 +521,195 @@ function nearestIndex(pos, lastIdx) {
   return best;
 }
 
+// ---------------------------------------------------------------- powerups & hazards
+// Like everything else, items live in track coordinates: a sample index plus
+// a lateral offset. Nitro pickups grant boost charges (Shift to fire), oil
+// slicks kill grip, and cone clusters at corner edges are knockable clutter.
+
+const trackSpot = (i, lateral) => samples[i].clone().addScaledVector(lefts[i], lateral);
+
+const pickups = [];   // { mesh, active, respawnT, phase }
+{
+  const canMat = new THREE.MeshStandardMaterial({
+    color: 0x18d2ff, emissive: 0x0aa6e0, emissiveIntensity: 1.6, metalness: 0.3, roughness: 0.3,
+  });
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x9ef0ff, transparent: true, opacity: 0.5 });
+  for (let k = 0; k < 10; k++) {
+    const i = 45 + k * 74 + Math.floor(Math.random() * 24);   // spread out, clear of the grid
+    const mesh = new THREE.Group();
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 1.1, 10), canMat);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.95, 0.07, 8, 24), ringMat);
+    ring.rotation.x = Math.PI / 2;
+    mesh.add(can, ring);
+    mesh.position.copy(trackSpot(i, (Math.random() - 0.5) * 9)).setY(1.1);
+    scene.add(mesh);
+    pickups.push({ mesh, active: true, respawnT: 0, phase: Math.random() * 6.28 });
+  }
+}
+
+const slicks = [];    // { pos, r }
+{
+  const slickTex = canvasTexture(128, 128, (ctx, w, h) => {
+    const g = ctx.createRadialGradient(w / 2, h / 2, 6, w / 2, h / 2, w / 2);
+    g.addColorStop(0, 'rgba(18,16,26,.95)');
+    g.addColorStop(0.7, 'rgba(24,22,36,.8)');
+    g.addColorStop(1, 'rgba(24,22,36,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 5; i++) {     // faint petrol sheen
+      ctx.strokeStyle = `hsla(${180 + Math.random() * 120},70%,55%,.14)`;
+      ctx.lineWidth = 2 + Math.random() * 3;
+      ctx.beginPath();
+      ctx.arc(w / 2, h / 2, 12 + Math.random() * 38, Math.random() * 6.28, Math.random() * 6.28);
+      ctx.stroke();
+    }
+  });
+  const mat = new THREE.MeshBasicMaterial({ map: slickTex, transparent: true, depthWrite: false });
+  for (let k = 0; k < 8; k++) {
+    const i = 90 + k * 88 + Math.floor(Math.random() * 20);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(7, 5.2), mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.rotation.z = Math.random() * Math.PI;
+    mesh.position.copy(trackSpot(i, (Math.random() - 0.5) * 7)).setY(0.04);
+    scene.add(mesh);
+    slicks.push({ pos: mesh.position, r: 2.9 });
+  }
+}
+
+const cones = [];     // { mesh, home, vel, rotVel, knocked }
+{
+  const coneGeo = new THREE.ConeGeometry(0.34, 0.95, 10);
+  const coneMat = new THREE.MeshStandardMaterial({
+    color: 0xe8641e, roughness: 0.7, emissive: 0x551c05, emissiveIntensity: 0.4,
+  });
+  for (let i = 130; i < N - 40 && cones.length < 15; i += 53) {
+    if (tangents[i].dot(tangents[(i + 20) % N]) > 0.96) continue;   // only near corners
+    const side = (cones.length / 3) % 2 ? -1 : 1;
+    for (let k = 0; k < 3; k++) {
+      const mesh = new THREE.Mesh(coneGeo, coneMat);
+      mesh.castShadow = true;
+      mesh.position.copy(trackSpot((i + k * 4) % N, side * (ROAD_HALF - 1.4))).setY(0.48);
+      scene.add(mesh);
+      cones.push({
+        mesh, home: mesh.position.clone(),
+        vel: new THREE.Vector3(), rotVel: new THREE.Vector3(), knocked: false,
+      });
+    }
+  }
+}
+
+// Nitro exhaust flames on the player car (shown only while boosting).
+const flames = [];
+{
+  const mat = new THREE.MeshBasicMaterial({ color: 0x55ccff, transparent: true, opacity: 0.85 });
+  for (const sx of [-0.5, 0.5]) {
+    const f = new THREE.Mesh(new THREE.ConeGeometry(0.22, 1.5, 8), mat);
+    f.rotation.x = -Math.PI / 2;       // apex points backwards
+    f.position.set(sx, 0.55, -2.5);
+    f.visible = false;
+    player.body.add(f);
+    flames.push(f);
+  }
+}
+
+function resetItems() {
+  for (const pk of pickups) { pk.active = true; pk.respawnT = 0; pk.mesh.visible = true; }
+  for (const c of cones) {
+    c.knocked = false;
+    c.vel.set(0, 0, 0);
+    c.mesh.position.copy(c.home);
+    c.mesh.rotation.set(0, 0, 0);
+  }
+  player.nitro = 0; player.boostT = 0; player.slickT = 0;
+  for (const f of flames) f.visible = false;
+}
+
+function knockCone(c, vx, vz) {
+  c.knocked = true;
+  c.vel.set(vx * 0.5, 4 + Math.random() * 2.5, vz * 0.5);
+  c.rotVel.set((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
+  blip(190, 60, 0.12, 'square', 0.05);
+}
+
+let itemBobT = 0;
+function updateItems(dt) {
+  itemBobT += dt;
+  const p = player;
+  const racing = state === 'racing' && !p.finished;
+
+  for (const pk of pickups) {
+    if (!pk.active) {
+      pk.respawnT -= dt;
+      if (pk.respawnT <= 0) { pk.active = true; pk.mesh.visible = true; }
+      continue;
+    }
+    pk.mesh.rotation.y += 2.2 * dt;
+    pk.mesh.position.y = 1.1 + Math.sin(itemBobT * 2.4 + pk.phase) * 0.16;
+    if (racing && p.nitro < NITRO_MAX) {
+      const dx = p.pos.x - pk.mesh.position.x, dz = p.pos.z - pk.mesh.position.z;
+      if (dx * dx + dz * dz < 2.4 * 2.4) {
+        p.nitro++;
+        pk.active = false;
+        pk.mesh.visible = false;
+        pk.respawnT = 15;
+        blip(660, 1450, 0.17, 'square', 0.05);
+      }
+    }
+  }
+
+  for (const s of slicks) {
+    if (racing) {
+      const dx = p.pos.x - s.pos.x, dz = p.pos.z - s.pos.z;
+      if (dx * dx + dz * dz < s.r * s.r) {
+        if (p.slickT <= 0) {   // fresh contact: pick a slide direction
+          p.slickSpin = (Math.random() < 0.5 ? -1 : 1) * (1.2 + Math.random() * 0.9);
+          blip(320, 70, 0.3, 'sawtooth', 0.05);
+        }
+        p.slickT = 0.55;
+      }
+    }
+    for (const ai of ais) {
+      const ax = ai.group.position.x - s.pos.x, az = ai.group.position.z - s.pos.z;
+      if (ax * ax + az * az < s.r * s.r) ai.speed *= Math.exp(-1.1 * dt);
+    }
+  }
+
+  for (const c of cones) {
+    if (c.knocked) {
+      if (c.vel.lengthSq() > 0.05) {   // tumble until it settles
+        c.vel.y -= 22 * dt;
+        c.mesh.position.addScaledVector(c.vel, dt);
+        c.mesh.rotation.x += c.rotVel.x * dt;
+        c.mesh.rotation.y += c.rotVel.y * dt;
+        c.mesh.rotation.z += c.rotVel.z * dt;
+        if (c.mesh.position.y < 0.3) {
+          c.mesh.position.y = 0.3;
+          c.vel.y *= -0.4;
+          c.vel.x *= 0.6; c.vel.z *= 0.6;
+          c.rotVel.multiplyScalar(0.55);
+          if (c.vel.lengthSq() < 1.2) c.vel.set(0, 0, 0);
+        }
+      }
+      continue;
+    }
+    const dx = p.pos.x - c.mesh.position.x, dz = p.pos.z - c.mesh.position.z;
+    if (dx * dx + dz * dz < 1.5 * 1.5 && p.vel.lengthSq() > 4) {
+      knockCone(c, p.vel.x, p.vel.z);
+      p.vel.multiplyScalar(0.96);      // each cone scrubs a little speed
+      continue;
+    }
+    for (const ai of ais) {
+      const ax = ai.group.position.x - c.mesh.position.x, az = ai.group.position.z - c.mesh.position.z;
+      if (ax * ax + az * az < 1.4 * 1.4 && ai.speed > 2) {
+        const ry = ai.group.rotation.y;
+        knockCone(c, Math.sin(ry) * ai.speed, Math.cos(ry) * ai.speed);
+        ai.speed *= 0.97;
+        break;
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------- input
 const keys = {};
 addEventListener('keydown', e => {
@@ -527,6 +720,12 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM') muted = !muted;
   if (e.code === 'KeyR' && state === 'racing') resetPlayer();
   if (e.code === 'Enter' && state === 'finished') startRace();
+  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') &&
+      state === 'racing' && !player.finished && player.nitro > 0 && player.boostT <= 0) {
+    player.nitro--;
+    player.boostT = NITRO_TIME;
+    blip(140, 750, 0.6, 'sawtooth', 0.09);
+  }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -570,6 +769,21 @@ function updateAudio(speed, throttle) {
   const vol = muted || state === 'finished' ? 0 : 0.025 + ratio * 0.04 + (throttle ? 0.015 : 0);
   engineGain.gain.setTargetAtTime(vol, audioCtx.currentTime, 0.08);
 }
+// One-shot effect: a pitch sweep with a fast decay (pickups, nitro, cone hits).
+function blip(freq0, freq1, dur, type = 'sawtooth', vol = 0.06) {
+  if (!audioCtx || muted) return;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq0, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(freq1, audioCtx.currentTime + dur);
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  osc.connect(g);
+  g.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + dur);
+}
 
 // ---------------------------------------------------------------- race state
 let state = 'countdown';   // countdown | racing | finished
@@ -586,6 +800,7 @@ const ui = {
   last: document.getElementById('last'),
   best: document.getElementById('best'),
   speed: document.getElementById('speed'),
+  nitro: document.getElementById('nitro'),
   count: document.getElementById('count'),
   results: document.getElementById('results'),
   resTitle: document.getElementById('resTitle'),
@@ -602,6 +817,7 @@ function fmtTime(t) {
 
 function startRace() {
   placeOnGrid();
+  resetItems();
   finishOrder = [];
   state = 'countdown';
   countdownT = 4.2;        // brief pause, then 3-2-1-GO
@@ -666,25 +882,32 @@ function updatePlayer(dt) {
   const speedFactor = clamp(Math.abs(fwdSpeed) / 11, 0, 1);
   const steerRate = 2.5 / (1 + Math.abs(fwdSpeed) * 0.018);
   p.heading += steer * steerRate * speedFactor * Math.sign(fwdSpeed || 1) * dt;
+  // oil makes the car yaw on its own (direction picked on contact)
+  if (p.slickT > 0) p.heading += p.slickSpin * clamp(Math.abs(fwdSpeed) / 28, 0, 1) * dt;
   _fwd.set(Math.sin(p.heading), 0, Math.cos(p.heading));
 
   // drivetrain
+  p.boostT = Math.max(0, p.boostT - dt);
+  p.slickT = Math.max(0, p.slickT - dt);
+  const boosting = p.boostT > 0 && state === 'racing' && !p.finished;
   let accel = 0;
   if (state === 'racing' && !p.finished) {
-    if (accelerate) {
+    if (accelerate || boosting) {
       const headroom = clamp(1 - Math.max(fwdSpeed, 0) / PLAYER_MAX_SPEED, 0, 1);
-      accel = (onTrack ? 17 : 7) * headroom;
+      accel = (onTrack ? 17 : 7) * headroom + (boosting ? 14 : 0);
     }
     if (brake) accel = fwdSpeed > 0.8 ? -30 : (fwdSpeed > -13 ? -9 : 0);   // brake, then reverse
+    if (p.slickT > 0) accel *= 0.35;   // wheels can't bite on oil
   }
   fwdSpeed += accel * dt;
+  if (boosting) fwdSpeed = Math.min(fwdSpeed, NITRO_TOP_SPEED);
 
   // resistance: rolling + aero drag, plus heavy grass drag off-track
   fwdSpeed -= fwdSpeed * (0.10 + (onTrack ? 0 : 1.4)) * dt;
   fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), 0.9 * dt);
 
-  // lateral grip (low while handbraking → drift)
-  const grip = handbrake ? 1.6 : (onTrack ? 7.5 : 3.2);
+  // lateral grip (low while handbraking → drift; near zero on oil)
+  const grip = p.slickT > 0 ? 1.0 : handbrake ? 1.6 : (onTrack ? 7.5 : 3.2);
   _lat.multiplyScalar(Math.exp(-grip * dt));
 
   p.vel.copy(_fwd).multiplyScalar(fwdSpeed).add(_lat);
@@ -739,6 +962,10 @@ function updatePlayer(dt) {
   const latAccel = steer * speedFactor * Math.abs(fwdSpeed) * 0.012;
   p.body.rotation.z = lerp(p.body.rotation.z, -latAccel, 1 - Math.exp(-6 * dt));
   p.body.rotation.x = lerp(p.body.rotation.x, -accel * 0.0035, 1 - Math.exp(-6 * dt));
+  for (const f of flames) {
+    f.visible = boosting;
+    if (boosting) f.scale.y = 0.7 + Math.random() * 0.7;   // flicker
+  }
 
   updateAudio(Math.abs(fwdSpeed), accelerate && state === 'racing');
   return fwdSpeed;
@@ -799,7 +1026,9 @@ function updateCamera(dt, fwdSpeed) {
   camPos.lerp(desired, k);
   camera.position.copy(camPos);
   camera.lookAt(look);
-  camera.fov = lerp(camera.fov, 68 + clamp(Math.abs(fwdSpeed) / PLAYER_MAX_SPEED, 0, 1) * 14, 1 - Math.exp(-4 * dt));
+  camera.fov = lerp(camera.fov,
+    68 + clamp(Math.abs(fwdSpeed) / PLAYER_MAX_SPEED, 0, 1) * 14 + (p.boostT > 0 ? 6 : 0),
+    1 - Math.exp(-4 * dt));
   camera.updateProjectionMatrix();
 
   sun.position.copy(p.pos).add(new THREE.Vector3(70, 110, 40));
@@ -851,6 +1080,8 @@ function updateHUD(fwdSpeed) {
   ui.time.textContent = 'TIME ' + fmtTime(state === 'countdown' ? 0 : now - player.lapStart);
   ui.last.textContent = 'LAST ' + fmtTime(player.lastLap);
   ui.best.textContent = 'BEST ' + fmtTime(player.bestLap);
+  ui.nitro.textContent = '◆'.repeat(player.nitro) + '◇'.repeat(NITRO_MAX - player.nitro);
+  ui.nitro.style.color = player.boostT > 0 ? '#ffb340' : '#38d6ff';
 }
 
 // ---------------------------------------------------------------- adaptive quality
@@ -902,6 +1133,7 @@ function frame(t) {
 
   const fwdSpeed = updatePlayer(dt);
   for (const ai of ais) updateAI(ai, dt);
+  updateItems(dt);
   updateCamera(dt, fwdSpeed);
   updateHUD(fwdSpeed);
   drawMinimap();
@@ -914,5 +1146,6 @@ requestAnimationFrame(frame);
 // Test/debug handle (used by the headless smoke test; harmless in normal play).
 window.__vc = {
   player, ais, entrants, samples, keys, N, trackLen,
+  pickups, slicks, cones,
   get state() { return state; },
 };
