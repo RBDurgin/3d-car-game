@@ -720,15 +720,48 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyM') muted = !muted;
   if (e.code === 'KeyR' && state === 'racing') resetPlayer();
   if (e.code === 'Enter' && state === 'finished') startRace();
-  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') &&
-      state === 'racing' && !player.finished && player.nitro > 0 && player.boostT <= 0) {
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+function fireNitro() {
+  if (state === 'racing' && !player.finished && player.nitro > 0 && player.boostT <= 0) {
     player.nitro--;
     player.boostT = NITRO_TIME;
     blip(140, 750, 0.6, 'sawtooth', 0.09);
   }
-});
-addEventListener('keyup', e => { keys[e.code] = false; });
-addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+}
+
+// touch controls: buttons live in index.html (#touchui) and feed the same `keys`
+// map as the keyboard, so updatePlayer() needs no changes
+if (matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0) {
+  document.body.classList.add('touch');
+  document.querySelector('#results .hint').innerHTML = 'Tap anywhere to race again';
+  for (const btn of document.querySelectorAll('#touchui [data-key]')) {
+    const code = btn.dataset.key;
+    const press = e => { e.preventDefault(); initAudio(); keys[code] = true; btn.classList.add('held'); };
+    const release = e => { e.preventDefault(); keys[code] = false; btn.classList.remove('held'); };
+    btn.addEventListener('pointerdown', press);
+    btn.addEventListener('pointerup', release);
+    btn.addEventListener('pointercancel', release);
+    btn.addEventListener('pointerleave', release);
+  }
+  document.getElementById('tNitro').addEventListener('pointerdown', e => {
+    e.preventDefault(); initAudio(); fireNitro();
+  });
+  document.getElementById('tCam').addEventListener('pointerdown', e => {
+    e.preventDefault(); cameraMode = (cameraMode + 1) % 3;
+  });
+  document.getElementById('tReset').addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (state === 'racing') resetPlayer();
+  });
+  addEventListener('pointerdown', e => {
+    if (e.pointerType === 'touch' && state === 'finished') startRace();
+  });
+  addEventListener('contextmenu', e => e.preventDefault());
+}
 
 function resetPlayer() {
   const i = player.trackIdx;

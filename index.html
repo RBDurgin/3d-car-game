@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Velocity Circuit — 3D Racing</title>
 <style>
   :root { --hud-font: "Segoe UI", system-ui, -apple-system, sans-serif; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
-  canvas#game { display: block; width: 100%; height: 100%; }
+  canvas#game { display: block; width: 100%; height: 100%; touch-action: none; }
 
   .hud { position: absolute; color: #fff; font-family: var(--hud-font);
          user-select: none; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
@@ -38,6 +38,26 @@
   #results .hint { margin-top: 14px; font-size: 14px; opacity: .8; }
 
   #help { left: 24px; bottom: 16px; font-size: 13px; opacity: .75; line-height: 1.5; }
+
+  /* touch controls — game.js adds .touch to <body> on touch devices */
+  #touchui { display: none; }
+  body.touch #touchui { display: block; }
+  body.touch #help { display: none; }
+  body.touch #speedo { right: 16px; bottom: calc(160px + env(safe-area-inset-bottom)); }
+  .tgroup { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom));
+            display: flex; gap: 14px; align-items: flex-end; }
+  .tgroup.left { left: calc(16px + env(safe-area-inset-left)); }
+  .tgroup.right { right: calc(16px + env(safe-area-inset-right)); }
+  .tbtn { width: 82px; height: 82px; border-radius: 50%;
+          border: 2px solid rgba(255,255,255,.4); background: rgba(255,255,255,.12);
+          color: #fff; font: 700 20px var(--hud-font); padding: 0;
+          touch-action: none; user-select: none; -webkit-user-select: none;
+          -webkit-tap-highlight-color: transparent; }
+  .tbtn.held { background: rgba(255,255,255,.32); }
+  .tbtn.gas { width: 96px; height: 96px; font-size: 26px; }
+  .tbtn.nitro { color: #38d6ff; border-color: rgba(56,214,255,.6); font-size: 26px; }
+  #tside { position: absolute; right: 20px; top: 200px; display: flex; gap: 10px; }
+  #tside .tbtn { width: 44px; height: 44px; font-size: 15px; opacity: .8; }
   #wrong { left: 50%; top: 18%; transform: translateX(-50%); font-size: 26px; font-weight: 800;
            color: #ff5544; display: none; }
 </style>
@@ -68,6 +88,22 @@
   <h1 id="resTitle">FINISH!</h1>
   <table id="resTable"></table>
   <div class="hint">Press <b>Enter</b> to race again</div>
+</div>
+
+<div id="touchui">
+  <div class="tgroup left">
+    <button class="tbtn" data-key="KeyA">◀</button>
+    <button class="tbtn" data-key="KeyD">▶</button>
+  </div>
+  <div class="tgroup right">
+    <button class="tbtn nitro" id="tNitro">⚡</button>
+    <button class="tbtn" data-key="KeyS">BRAKE</button>
+    <button class="tbtn gas" data-key="KeyW">GAS</button>
+  </div>
+  <div id="tside">
+    <button class="tbtn" id="tCam">CAM</button>
+    <button class="tbtn" id="tReset">RST</button>
+  </div>
 </div>
 
 <div id="help" class="hud">
