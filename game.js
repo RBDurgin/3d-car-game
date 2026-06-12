@@ -723,6 +723,8 @@ addEventListener('keydown', e => {
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
+// iOS only unlocks audio on the release half of a tap, so retry there too
+addEventListener('pointerup', () => initAudio());
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
 function fireNitro() {
@@ -768,7 +770,13 @@ function resetPlayer() {
 // ---------------------------------------------------------------- audio
 let audioCtx = null, engineOsc = null, engineOsc2 = null, engineGain = null, muted = false;
 function initAudio() {
-  if (audioCtx) return;
+  // iOS can create the context in the 'suspended' state (pointerdown doesn't
+  // always count as an audio-unlocking gesture), so retry resume() on every
+  // gesture until it's actually running instead of bailing after creation
+  if (audioCtx) {
+    if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
+    return;
+  }
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     engineGain = audioCtx.createGain();
@@ -786,6 +794,7 @@ function initAudio() {
     engineGain.connect(audioCtx.destination);
     engineOsc.start();
     engineOsc2.start();
+    if (audioCtx.state !== 'running') audioCtx.resume().catch(() => {});
   } catch { /* audio unavailable; play silently */ }
 }
 function updateAudio(speed, throttle) {
