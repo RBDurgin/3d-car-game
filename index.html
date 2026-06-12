@@ -44,7 +44,7 @@
   body.touch #touchui { display: block; }
   body.touch #help { display: none; }
   /* landscape is the designed touch layout: speedo sits bottom-center between
-     the steer and pedal clusters, clear of the minimap/CAM/RST on the right */
+     the steer and pedal clusters, clear of the minimap on the right */
   body.touch #speedo { left: 50%; right: auto; transform: translateX(-50%);
                        text-align: center; bottom: calc(12px + env(safe-area-inset-bottom)); }
   .tgroup { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom));
@@ -59,8 +59,6 @@
   .tbtn.held { background: rgba(255,255,255,.32); }
   .tbtn.gas { width: 96px; height: 96px; font-size: 26px; }
   .tbtn.nitro { color: #38d6ff; border-color: rgba(56,214,255,.6); font-size: 26px; }
-  #tside { position: absolute; right: 20px; top: 200px; display: flex; gap: 10px; }
-  #tside .tbtn { width: 44px; height: 44px; font-size: 15px; opacity: .8; }
 
   /* portrait on a touch device: block play, ask for landscape */
   #rotate { position: fixed; inset: 0; z-index: 10; display: none;
@@ -120,10 +118,6 @@
     <button class="tbtn nitro" id="tNitro">⚡</button>
     <button class="tbtn" data-key="KeyS">BRAKE</button>
     <button class="tbtn gas" data-key="KeyW">GAS</button>
-  </div>
-  <div id="tside">
-    <button class="tbtn" id="tCam">CAM</button>
-    <button class="tbtn" id="tReset">RST</button>
   </div>
 </div>
 

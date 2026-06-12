@@ -752,13 +752,6 @@ if (touchUI) {
   document.getElementById('tNitro').addEventListener('pointerdown', e => {
     e.preventDefault(); initAudio(); fireNitro();
   });
-  document.getElementById('tCam').addEventListener('pointerdown', e => {
-    e.preventDefault(); cameraMode = (cameraMode + 1) % 3;
-  });
-  document.getElementById('tReset').addEventListener('pointerdown', e => {
-    e.preventDefault();
-    if (state === 'racing') resetPlayer();
-  });
   addEventListener('pointerdown', e => {
     if (e.pointerType === 'touch' && state === 'finished') startRace();
   });
