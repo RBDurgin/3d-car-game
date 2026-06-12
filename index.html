@@ -6,7 +6,8 @@
 <title>Velocity Circuit — 3D Racing</title>
 <style>
   :root { --hud-font: "Segoe UI", system-ui, -apple-system, sans-serif; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000;
+               touch-action: none; overscroll-behavior: none; }
   canvas#game { display: block; width: 100%; height: 100%; touch-action: none; }
 
   .hud { position: absolute; color: #fff; font-family: var(--hud-font);
@@ -145,6 +146,18 @@
     if (!test.getContext('webgl2') && !test.getContext('webgl'))
       fatal('WebGL is not available in this browser. The game needs WebGL to render.');
   } catch (err) { fatal('WebGL check failed: ' + err.message); }
+
+  // iOS WebKit ignores user-scalable=no and touch-action for pinch/double-tap
+  // zoom; the gesture events below are the only reliable way to suppress them.
+  // Safe for game input: controls use pointer events, which still fire.
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend'])
+    addEventListener(ev, e => e.preventDefault(), { passive: false });
+  let lastTouchEnd = 0;
+  addEventListener('touchend', e => {
+    const now = Date.now();
+    if (now - lastTouchEnd < 350) e.preventDefault(); // double-tap zoom
+    lastTouchEnd = now;
+  }, { passive: false });
 </script>
 <script type="importmap">{ "imports": { "three": "./three.module.js" } }</script>
 <script type="module" src="./game.js"></script>
