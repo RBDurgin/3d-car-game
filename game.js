@@ -735,7 +735,9 @@ function fireNitro() {
 
 // touch controls: buttons live in index.html (#touchui) and feed the same `keys`
 // map as the keyboard, so updatePlayer() needs no changes
-if (matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0) {
+const touchUI = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+const portraitMQ = matchMedia('(orientation: portrait)');
+if (touchUI) {
   document.body.classList.add('touch');
   document.querySelector('#results .hint').innerHTML = 'Tap anywhere to race again';
   for (const btn of document.querySelectorAll('#touchui [data-key]')) {
@@ -1150,7 +1152,8 @@ function frame(t) {
   checkPerformance(rawDt);
 
   if (state === 'countdown') {
-    countdownT -= dt;
+    // hold the countdown while the rotate-your-phone overlay is up (touch + portrait)
+    if (!(touchUI && portraitMQ.matches)) countdownT -= dt;
     const n = Math.ceil(countdownT - 0.7);
     ui.count.textContent = countdownT <= 0.7 ? 'GO!' : (n <= 3 ? String(n) : '');
     if (countdownT <= 0) {

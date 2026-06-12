@@ -43,7 +43,10 @@
   #touchui { display: none; }
   body.touch #touchui { display: block; }
   body.touch #help { display: none; }
-  body.touch #speedo { right: 16px; bottom: calc(160px + env(safe-area-inset-bottom)); }
+  /* landscape is the designed touch layout: speedo sits bottom-center between
+     the steer and pedal clusters, clear of the minimap/CAM/RST on the right */
+  body.touch #speedo { left: 50%; right: auto; transform: translateX(-50%);
+                       text-align: center; bottom: calc(12px + env(safe-area-inset-bottom)); }
   .tgroup { position: absolute; bottom: calc(18px + env(safe-area-inset-bottom));
             display: flex; gap: 14px; align-items: flex-end; }
   .tgroup.left { left: calc(16px + env(safe-area-inset-left)); }
@@ -58,6 +61,18 @@
   .tbtn.nitro { color: #38d6ff; border-color: rgba(56,214,255,.6); font-size: 26px; }
   #tside { position: absolute; right: 20px; top: 200px; display: flex; gap: 10px; }
   #tside .tbtn { width: 44px; height: 44px; font-size: 15px; opacity: .8; }
+
+  /* portrait on a touch device: block play, ask for landscape */
+  #rotate { position: fixed; inset: 0; z-index: 10; display: none;
+            background: rgba(6, 10, 20, .94); color: #fff; font-family: var(--hud-font);
+            text-align: center; align-items: center; justify-content: center;
+            flex-direction: column; gap: 14px; }
+  #rotate .phone { font-size: 64px; animation: tilt 1.6s ease-in-out infinite; }
+  #rotate .msg { font-size: 22px; font-weight: 700; }
+  #rotate .sub { font-size: 14px; opacity: .75; }
+  @keyframes tilt { 0%, 25% { transform: rotate(0deg); }
+                    60%, 100% { transform: rotate(90deg); } }
+  @media (orientation: portrait) { body.touch #rotate { display: flex; } }
   #wrong { left: 50%; top: 18%; transform: translateX(-50%); font-size: 26px; font-weight: 800;
            color: #ff5544; display: none; }
 </style>
@@ -88,6 +103,12 @@
   <h1 id="resTitle">FINISH!</h1>
   <table id="resTable"></table>
   <div class="hint">Press <b>Enter</b> to race again</div>
+</div>
+
+<div id="rotate">
+  <div class="phone">📱</div>
+  <div class="msg">Rotate your phone</div>
+  <div class="sub">Velocity Circuit plays in landscape</div>
 </div>
 
 <div id="touchui">
