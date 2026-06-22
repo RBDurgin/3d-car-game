@@ -30,6 +30,16 @@ scene.fog = new THREE.Fog(0x9fc8ea, 260, 1100);
 
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 2500);
 
+// FOV is authored as a *vertical* angle at this reference aspect; vFovForAspect
+// re-derives the vertical FOV needed to keep the same *horizontal* view on the
+// current screen, so wide phone-landscape screens don't read as zoomed-out.
+const REF_ASPECT = 16 / 9;
+const DEG = Math.PI / 180;
+function vFovForAspect(designVFovDeg, aspect) {
+  const hHalf = Math.atan(Math.tan(designVFovDeg * DEG / 2) * REF_ASPECT);
+  return clamp(2 * Math.atan(Math.tan(hHalf) / aspect) / DEG, 40, 90);
+}
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -1063,8 +1073,9 @@ function updateCamera(dt, fwdSpeed) {
   camPos.lerp(desired, k);
   camera.position.copy(camPos);
   camera.lookAt(look);
-  camera.fov = lerp(camera.fov,
-    68 + clamp(Math.abs(fwdSpeed) / PLAYER_MAX_SPEED, 0, 1) * 14 + (p.boostT > 0 ? 6 : 0),
+  const designFov = 68 + clamp(Math.abs(fwdSpeed) / PLAYER_MAX_SPEED, 0, 1) * 14
+                       + (p.boostT > 0 ? 6 : 0);
+  camera.fov = lerp(camera.fov, vFovForAspect(designFov, camera.aspect),
     1 - Math.exp(-4 * dt));
   camera.updateProjectionMatrix();
 
