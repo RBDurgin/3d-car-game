@@ -1,1 +1,7 @@
 .vercel/
+
+# Dev-only car preview harness (never shipped)
+node_modules/
+package.json
+package-lock.json
+tools/

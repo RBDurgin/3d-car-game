@@ -2,6 +2,7 @@
 // Everything (track, cars, scenery, textures) is generated procedurally at load.
 
 import * as THREE from 'three';
+import { buildCar } from './car.js';
 
 // ---------------------------------------------------------------- constants
 const LAPS = 3;
@@ -23,6 +24,8 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fc1e8);
@@ -72,6 +75,27 @@ function canvasTexture(w, h, draw) {
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+// One-time procedural environment map: a sky→horizon→ground gradient, prefiltered
+// through PMREM so glossy car paint has something to reflect. Used for reflections
+// only (scene.background stays the flat sky color).
+(function buildEnvironment() {
+  const envSrc = canvasTexture(256, 128, (ctx, w, h) => {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0.00, '#bfe0ff');   // zenith
+    g.addColorStop(0.45, '#eaf4ff');   // bright sky near horizon
+    g.addColorStop(0.50, '#f4f1e6');   // horizon haze
+    g.addColorStop(0.55, '#6f7d68');   // ground just below horizon
+    g.addColorStop(1.00, '#39402f');   // dark ground
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  });
+  envSrc.mapping = THREE.EquirectangularReflectionMapping;
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromEquirectangular(envSrc).texture;
+  pmrem.dispose();
+  envSrc.dispose();
+})();
 
 function noise(ctx, w, h, count, alpha) {
   for (let i = 0; i < count; i++) {
@@ -393,67 +417,6 @@ const aiSpeedTable = new Float32Array(N);
     scene.add(board);
     made++;
   }
-}
-
-// ---------------------------------------------------------------- cars
-function buildCar(bodyColor) {
-  const group = new THREE.Group();
-  const body = new THREE.Group();   // separate so it can roll in corners
-  group.add(body);
-
-  const paint = new THREE.MeshStandardMaterial({ color: bodyColor, metalness: 0.45, roughness: 0.35 });
-  const dark = new THREE.MeshStandardMaterial({ color: 0x14181f, metalness: 0.2, roughness: 0.5 });
-
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.55, 4.3), paint);
-  chassis.position.y = 0.55;
-  const nose = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.35, 0.9), paint);
-  nose.position.set(0, 0.45, 2.4);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.5, 1.9), dark);
-  cabin.position.set(0, 1.05, -0.25);
-  const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.1, 0.5), paint);
-  spoiler.position.set(0, 1.15, -2.0);
-  const spoilerLegL = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.35, 0.1), dark);
-  spoilerLegL.position.set(-0.7, 0.95, -2.0);
-  const spoilerLegR = spoilerLegL.clone();
-  spoilerLegR.position.x = 0.7;
-  body.add(chassis, nose, cabin, spoiler, spoilerLegL, spoilerLegR);
-
-  const lightMat = new THREE.MeshStandardMaterial({ color: 0xfff6cc, emissive: 0xfff0aa, emissiveIntensity: 1.2 });
-  const tailMat = new THREE.MeshStandardMaterial({ color: 0xff3322, emissive: 0xcc1100, emissiveIntensity: 0.9 });
-  for (const sx of [-0.6, 0.6]) {
-    const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.18, 0.06), lightMat);
-    head.position.set(sx, 0.55, 2.86);
-    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.16, 0.06), tailMat);
-    tail.position.set(sx, 0.62, -2.18);
-    body.add(head, tail);
-  }
-
-  const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.36, 14);
-  wheelGeo.rotateZ(Math.PI / 2);
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.9 });
-  const hubGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.38, 8);
-  hubGeo.rotateZ(Math.PI / 2);
-  const hubMat = new THREE.MeshStandardMaterial({ color: 0xb9bec6, metalness: 0.8, roughness: 0.3 });
-
-  const wheels = [], frontPivots = [];
-  for (const [x, z, front] of [[-0.95, 1.45, 1], [0.95, 1.45, 1], [-0.95, -1.45, 0], [0.95, -1.45, 0]]) {
-    const wheel = new THREE.Group();
-    wheel.add(new THREE.Mesh(wheelGeo, wheelMat), new THREE.Mesh(hubGeo, hubMat));
-    wheels.push(wheel);
-    if (front) {
-      const pivot = new THREE.Group();
-      pivot.position.set(x, 0.42, z);
-      pivot.add(wheel);
-      frontPivots.push(pivot);
-      group.add(pivot);
-    } else {
-      wheel.position.set(x, 0.42, z);
-      group.add(wheel);
-    }
-  }
-
-  group.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  return { group, body, wheels, frontPivots };
 }
 
 // Heading convention: h = 0 faces +Z, forward = (sin h, 0, cos h).
