@@ -1,8 +1,9 @@
 // ---------------------------------------------------------------- cars
 // Procedural car builder, factored out of game.js so it can also be rendered in
 // isolation by the dev preview harness (tools/preview.html). buildCar() returns
-// { group, body, wheels, frontPivots }; the game animates body roll/pitch, wheel spin
-// (tyre radius 0.42) and front-wheel steering against that contract.
+// { group, body, wheels, frontPivots, lightMat, tailMat }; the game animates body
+// roll/pitch, wheel spin (tyre radius 0.42) and front-wheel steering against that
+// contract, and boosts lightMat/tailMat emissive for night headlights.
 import * as THREE from 'three';
 
 // A box whose top face is tapered inward (narrower/shorter) than its base, so the
@@ -112,5 +113,5 @@ export function buildCar(bodyColor) {
   }
 
   group.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  return { group, body, wheels, frontPivots };
+  return { group, body, wheels, frontPivots, lightMat, tailMat };
 }
