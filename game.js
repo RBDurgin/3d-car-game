@@ -1197,6 +1197,8 @@ function updatePlayer(dt) {
 }
 
 // ---------------------------------------------------------------- AI
+const _aiTan = new THREE.Vector3();
+
 function updateAI(ai, dt) {
   const i = Math.floor(((ai.u0 + ai.traveled / trackLen) % 1) * N);
 
@@ -1215,16 +1217,25 @@ function updateAI(ai, dt) {
   if (P >= LAPS && !ai.finished) finishCar(ai);
   ai.lap = Math.min(Math.floor(P) + 1, LAPS);
 
-  const u = P % 1;
-  const pos = curve.getPointAt(u);
-  const tan = curve.getTangentAt(u);
-  tan.y = 0; tan.normalize();
+  // The centerline is already baked into samples/tangents (same arc-length
+  // parameterization as getPointAt), so interpolate those instead of re-evaluating
+  // the Catmull-Rom curve — it's the same point, minus the per-frame allocations
+  // and binary-search cost of getPointAt/getTangentAt.
+  const f = (P % 1) * N;
+  const a = Math.floor(f) % N, b = (a + 1) % N, frac = f - Math.floor(f);
+  _aiTan.copy(tangents[a]).lerp(tangents[b], frac);
+  _aiTan.y = 0; _aiTan.normalize();
   // gentle lane weaving so the AI don't ride a single rail
   ai.lane = lerp(ai.lane, Math.sin(P * Math.PI * 2 * 3 + ai.lanePhase) * 2.6, 0.02);
-  pos.addScaledVector(new THREE.Vector3(tan.z, 0, -tan.x), ai.lane);
 
-  ai.group.position.copy(pos);
-  ai.group.rotation.y = Math.atan2(tan.x, tan.z);
+  const sa = samples[a], sb = samples[b];
+  // left vector for the lane offset is (tan.z, 0, -tan.x)
+  ai.group.position.set(
+    sa.x + (sb.x - sa.x) * frac + _aiTan.z * ai.lane,
+    0,
+    sa.z + (sb.z - sa.z) * frac - _aiTan.x * ai.lane,
+  );
+  ai.group.rotation.y = Math.atan2(_aiTan.x, _aiTan.z);
   ai.wheelSpin += ai.speed * dt / 0.42;
   for (const w of ai.wheels) w.children.forEach(c => c.rotation.x = ai.wheelSpin);
 }
@@ -1232,19 +1243,20 @@ function updateAI(ai, dt) {
 // ---------------------------------------------------------------- camera
 const camPos = new THREE.Vector3();
 const camLook = new THREE.Vector3();
+const SUN_OFFSET = new THREE.Vector3(70, 110, 40);
 
 function updateCamera(dt, fwdSpeed) {
   const p = player;
   _fwd.set(Math.sin(p.heading), 0, Math.cos(p.heading));
   let desired, look;
   if (cameraMode === 0) {          // chase
-    desired = _tmp.copy(p.pos).addScaledVector(_fwd, -9).add(new THREE.Vector3(0, 4, 0));
-    look = camLook.copy(p.pos).addScaledVector(_fwd, 7).add(new THREE.Vector3(0, 1.2, 0));
+    desired = _tmp.copy(p.pos).addScaledVector(_fwd, -9); desired.y += 4;
+    look = camLook.copy(p.pos).addScaledVector(_fwd, 7); look.y += 1.2;
   } else if (cameraMode === 1) {   // hood
-    desired = _tmp.copy(p.pos).addScaledVector(_fwd, 0.6).add(new THREE.Vector3(0, 1.55, 0));
-    look = camLook.copy(p.pos).addScaledVector(_fwd, 25).add(new THREE.Vector3(0, 1.0, 0));
+    desired = _tmp.copy(p.pos).addScaledVector(_fwd, 0.6); desired.y += 1.55;
+    look = camLook.copy(p.pos).addScaledVector(_fwd, 25); look.y += 1.0;
   } else {                         // overhead
-    desired = _tmp.copy(p.pos).add(new THREE.Vector3(0, 60, 0)).addScaledVector(_fwd, -12);
+    desired = _tmp.copy(p.pos).addScaledVector(_fwd, -12); desired.y += 60;
     look = camLook.copy(p.pos);
   }
   const k = cameraMode === 1 ? 1 : 1 - Math.exp(-5.5 * dt);
@@ -1257,7 +1269,7 @@ function updateCamera(dt, fwdSpeed) {
     1 - Math.exp(-4 * dt));
   camera.updateProjectionMatrix();
 
-  sun.position.copy(p.pos).add(new THREE.Vector3(70, 110, 40));
+  sun.position.copy(p.pos).add(SUN_OFFSET);
   sun.target.position.copy(p.pos);
 }
 
@@ -1277,18 +1289,29 @@ const mapPts = (() => {
   return { toMap, pts: samples.map(toMap) };
 })();
 
-function drawMinimap() {
-  const ctx = mapCtx, W = mapCanvas.width;
-  ctx.clearRect(0, 0, W, W);
+// The track outline never changes, so stroke it once to an offscreen canvas and
+// blit it each frame; only the car dots are redrawn live. Car colors are static
+// too, so resolve their hex strings up front.
+const mapBg = document.createElement('canvas');
+mapBg.width = mapBg.height = mapCanvas.width;
+{
+  const ctx = mapBg.getContext('2d');
   ctx.strokeStyle = 'rgba(255,255,255,.75)';
   ctx.lineWidth = 4;
   ctx.beginPath();
   mapPts.pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
   ctx.closePath();
   ctx.stroke();
+}
+const mapColors = new Map(entrants.map(c => [c, '#' + new THREE.Color(c.color).getHexString()]));
+
+function drawMinimap() {
+  const ctx = mapCtx, W = mapCanvas.width;
+  ctx.clearRect(0, 0, W, W);
+  ctx.drawImage(mapBg, 0, 0);
   for (const car of entrants) {
     const [x, y] = mapPts.toMap(car.isPlayer ? car.pos : car.group.position);
-    ctx.fillStyle = '#' + new THREE.Color(car.color).getHexString();
+    ctx.fillStyle = mapColors.get(car);
     ctx.beginPath();
     ctx.arc(x, y, car.isPlayer ? 5 : 4, 0, 7);
     ctx.fill();
