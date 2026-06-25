@@ -561,7 +561,7 @@ const player = {
   ...buildCar(0xd5212e),
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), heading: 0,
   trackIdx: 0, lateral: 0, crossings: 0, passedHalf: false,
-  progress: 0, lap: 1, finished: false, finishTime: 0,
+  progress: 0, lap: 1, finished: false, finishTime: 0, champPoints: 0,
   lapStart: 0, lastLap: 0, bestLap: 0, wheelSpin: 0, steerVis: 0,
   nitro: 0, boostT: 0, slickT: 0, slickSpin: 0,
 };
@@ -576,7 +576,7 @@ for (let i = 0; i < AI_COUNT; i++) {
     ...buildCar(aiColors[i]),
     u0: 0, traveled: 0, speed: 0, lane: 0, lanePhase: Math.random() * 6.28,
     skill: 0.88 + i * 0.035,            // back of grid = fastest, for drama
-    progress: 0, lap: 1, finished: false, finishTime: 0, wheelSpin: 0,
+    progress: 0, lap: 1, finished: false, finishTime: 0, champPoints: 0, wheelSpin: 0,
   };
   ais.push(car);
   scene.add(car.group);
@@ -848,7 +848,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyC') cameraMode = (cameraMode + 1) % 3;
   if (e.code === 'KeyM') muted = !muted;
   if (e.code === 'KeyR' && state === 'racing') resetPlayer();
-  if (e.code === 'Enter' && state === 'finished') startRace();
+  if (e.code === 'Enter' && state === 'finished') nextRaceOrSeason();
   if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') fireNitro();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -884,7 +884,7 @@ if (touchUI) {
     e.preventDefault(); initAudio(); fireNitro();
   });
   addEventListener('pointerdown', e => {
-    if (e.pointerType === 'touch' && state === 'finished') startRace();
+    if (e.pointerType === 'touch' && state === 'finished') nextRaceOrSeason();
   });
   addEventListener('contextmenu', e => e.preventDefault());
 }
@@ -956,6 +956,12 @@ let state = 'countdown';   // countdown | racing | finished
 let countdownT = 0;
 let raceStart = 0;
 let finishOrder = [];
+
+// championship / season: a run of CHAMP_ROUNDS races (one per weather preset),
+// scored by finishing position with cumulative standings across rounds.
+const CHAMP_ROUNDS = 4;
+const CHAMP_POINTS = [10, 6, 4, 2, 1];   // points by finishing position (1st..5th)
+let champRound = 1;                        // current round, 1..CHAMP_ROUNDS
 let cameraMode = 0;        // 0 chase, 1 hood, 2 overhead
 let now = 0;               // race clock, seconds
 
@@ -969,9 +975,12 @@ const ui = {
   nitro: document.getElementById('nitro'),
   count: document.getElementById('count'),
   weather: document.getElementById('weather'),
+  round: document.getElementById('round'),
   results: document.getElementById('results'),
   resTitle: document.getElementById('resTitle'),
   resTable: document.getElementById('resTable'),
+  champTable: document.getElementById('champTable'),
+  resHint: document.getElementById('resHint'),
   wrong: document.getElementById('wrong'),
 };
 
@@ -995,6 +1004,26 @@ function startRace() {
   ui.count.textContent = '';
 }
 
+// Begin a fresh season: zero everyone's points and restart the weather cycle so
+// round 1 always opens on Clear, then drop into the first race.
+function startChampionship() {
+  champRound = 1;
+  weatherIdx = -1;
+  for (const c of entrants) c.champPoints = 0;
+  startRace();
+}
+
+// The single "continue" entry point used by the Enter key and touch tap on the
+// results screen: advance to the next round, or roll into a new season.
+function nextRaceOrSeason() {
+  if (champRound >= CHAMP_ROUNDS) {
+    startChampionship();
+  } else {
+    champRound++;
+    startRace();
+  }
+}
+
 function finishCar(car) {
   car.finished = true;
   car.finishTime = now;
@@ -1007,20 +1036,45 @@ const ordinal = n => n + (['th', 'st', 'nd', 'rd'][(n % 100 > 10 && n % 100 < 14
 function showResults() {
   state = 'finished';
   const place = finishOrder.indexOf(player) + 1;
-  ui.resTitle.textContent = place === 1 ? '🏆 YOU WIN!' : `${ordinal(place).toUpperCase()} PLACE`;
   // Unfinished AI get projected times based on remaining distance.
   const rows = entrants
     .map(c => ({ c, t: c.finished ? c.finishTime : now + (LAPS - c.progress) * trackLen / 40 }))
     .sort((a, b) => a.t - b.t);
+  // Award championship points by finishing position, then build the race table.
+  rows.forEach((r, i) => { r.c.champPoints += CHAMP_POINTS[i] || 0; });
   ui.resTable.innerHTML = rows.map((r, i) =>
     `<tr style="color:${r.c.isPlayer ? '#ffd34d' : '#fff'}">
        <td>${i + 1}.</td><td>${r.c.name}</td>
        <td>${r.c.finished ? fmtTime(r.t) : 'est. ' + fmtTime(r.t)}</td>
+       <td>+${CHAMP_POINTS[i] || 0}</td>
      </tr>`).join('');
   const best = document.createElement('tr');
-  best.innerHTML = `<td></td><td>Best lap</td><td>${fmtTime(player.bestLap)}</td>`;
+  best.innerHTML = `<td></td><td>Best lap</td><td colspan="2">${fmtTime(player.bestLap)}</td>`;
   best.style.opacity = '0.8';
   ui.resTable.appendChild(best);
+
+  // Championship standings: cumulative points, ties broken by this race's finish.
+  const racePos = new Map(rows.map((r, i) => [r.c, i]));
+  const standings = [...entrants].sort((a, b) =>
+    (b.champPoints - a.champPoints) || (racePos.get(a) - racePos.get(b)));
+  ui.champTable.innerHTML =
+    `<tr class="champHead"><td colspan="3">Championship — Round ${champRound}/${CHAMP_ROUNDS}</td></tr>` +
+    standings.map((c, i) =>
+      `<tr style="color:${c.isPlayer ? '#ffd34d' : '#fff'}">
+         <td>${i + 1}.</td><td>${c.name}</td><td>${c.champPoints} pts</td>
+       </tr>`).join('');
+
+  if (champRound < CHAMP_ROUNDS) {
+    ui.resTitle.textContent = place === 1 ? '🏆 YOU WIN!' : `${ordinal(place).toUpperCase()} PLACE`;
+    ui.resHint.innerHTML = `Press <b>Enter</b> for Round ${champRound + 1}`;
+  } else {
+    const champ = standings[0];
+    const playerStanding = standings.indexOf(player) + 1;
+    ui.resTitle.textContent = champ.isPlayer
+      ? '🏆 CHAMPION!'
+      : `${champ.name} WINS — you placed ${ordinal(playerStanding)}`;
+    ui.resHint.innerHTML = 'Press <b>Enter</b> for a new championship';
+  }
   ui.results.style.display = 'block';
 }
 
@@ -1254,6 +1308,7 @@ function updateHUD(fwdSpeed) {
   ui.best.textContent = 'BEST ' + fmtTime(player.bestLap);
   ui.nitro.textContent = '◆'.repeat(player.nitro) + '◇'.repeat(NITRO_MAX - player.nitro);
   ui.nitro.style.color = player.boostT > 0 ? '#ffb340' : '#38d6ff';
+  ui.round.textContent = `ROUND ${champRound}/${CHAMP_ROUNDS}`;
 }
 
 // ---------------------------------------------------------------- adaptive quality
@@ -1314,7 +1369,7 @@ function frame(t) {
   renderer.render(scene, camera);
 }
 
-startRace();
+startChampionship();
 requestAnimationFrame(frame);
 
 // Test/debug handle (used by the headless smoke test; harmless in normal play).
@@ -1323,5 +1378,7 @@ window.__vc = {
   pickups, slicks, cones,
   get state() { return state; },
   get weather() { return weather.label; },
+  get champRound() { return champRound; },
   restart: () => startRace(),
+  nextRaceOrSeason, startChampionship,
 };
