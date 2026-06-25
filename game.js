@@ -50,7 +50,9 @@ addEventListener('resize', () => {
 });
 
 // ---------------------------------------------------------------- lighting
-scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x4a6a3a, 0.85));
+// hemi + sun are kept as references so the weather system can restyle them per race.
+const hemi = new THREE.HemisphereLight(0xcfe5ff, 0x4a6a3a, 0.85);
+scene.add(hemi);
 
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.0);
 sun.castShadow = true;
@@ -63,6 +65,134 @@ sun.shadow.camera.near = 10;
 sun.shadow.camera.far = 400;
 sun.shadow.bias = -0.0006;
 scene.add(sun, sun.target);
+
+// ---------------------------------------------------------------- weather
+// Each race rolls one of these presets; applyWeather() mutates the existing
+// scene/lighting objects in place (never recreates them) and toggles rain +
+// headlights. Physics (grip) and the frame loop (rain) read the active preset
+// through the module-level `weather`. The PMREM reflection env map (built below)
+// is intentionally left fixed — see the known-limitations note in the plan.
+const WEATHER_PRESETS = {
+  clear: {
+    bg: 0x8fc1e8, fogColor: 0x9fc8ea, fogNear: 260, fogFar: 1100,
+    hemiSky: 0xcfe5ff, hemiGround: 0x4a6a3a, hemiInt: 0.85,
+    sunColor: 0xfff1d6, sunInt: 2.0, exposure: 1.0, envInt: 1.0,
+    rain: false, gripMul: 1.0, night: false, label: '☀ Clear',
+  },
+  overcast: {
+    bg: 0x9aa6b0, fogColor: 0xaab4bd, fogNear: 220, fogFar: 950,
+    hemiSky: 0xc4ccd4, hemiGround: 0x55603f, hemiInt: 0.7,
+    sunColor: 0xdfe2e6, sunInt: 1.1, exposure: 0.95, envInt: 0.6,
+    rain: false, gripMul: 1.0, night: false, label: '☁ Overcast',
+  },
+  rain: {
+    bg: 0x5c656e, fogColor: 0x6a727b, fogNear: 180, fogFar: 800,
+    hemiSky: 0x9aa4ad, hemiGround: 0x434a36, hemiInt: 0.55,
+    sunColor: 0xb9bcc0, sunInt: 0.7, exposure: 0.85, envInt: 0.45,
+    rain: true, gripMul: 0.72, night: false, label: '🌧 Rain',
+  },
+  night: {
+    bg: 0x0a0d16, fogColor: 0x10131f, fogNear: 150, fogFar: 900,
+    hemiSky: 0x2a3550, hemiGround: 0x10131c, hemiInt: 0.18,
+    sunColor: 0x9fb0d0, sunInt: 0.35, exposure: 1.05, envInt: 0.12,
+    rain: false, gripMul: 1.0, night: true, label: '🌙 Night',
+  },
+};
+const PRESET_NAMES = ['clear', 'overcast', 'rain', 'night'];
+let weather = WEATHER_PRESETS.clear;   // safe default before the first startRace()
+let weatherIdx = -1;
+
+// Rain: a fixed-size point cloud kept centered on the camera each frame (only when
+// the active preset is wet). Verts are seeded in a box around the origin; frame()
+// translates the box to the camera and wraps fallen drops back to the top.
+const RAIN_COUNT = 1500;
+const RAIN_BOX_XZ = 40;   // half-extent around the camera, metres
+const RAIN_BOX_Y = 35;    // column height
+const RAIN_FALL = 38;     // m/s
+const rain = (() => {
+  const pos = new Float32Array(RAIN_COUNT * 3);
+  for (let i = 0; i < RAIN_COUNT; i++) {
+    pos[i * 3]     = (Math.random() * 2 - 1) * RAIN_BOX_XZ;
+    pos[i * 3 + 1] = Math.random() * RAIN_BOX_Y;
+    pos[i * 3 + 2] = (Math.random() * 2 - 1) * RAIN_BOX_XZ;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xaecbe0, size: 0.5, transparent: true, opacity: 0.5,
+    sizeAttenuation: true, depthWrite: false, fog: true,
+  });
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;   // we move it every frame; culling would flicker it
+  points.visible = false;
+  scene.add(points);
+  return points;
+})();
+
+// scene.environment (the PMREM map below) gives every PBR material image-based
+// ambient light, so just dimming the hemi/sun isn't enough to make night dark —
+// the env contribution has to come down too. r160 has no scene-wide control, so we
+// scale each material's envMapIntensity off a cached base value. Collected lazily on
+// the first applyWeather() call (from startRace), by which point all meshes exist.
+let envMats = null;
+function scaleEnv(factor) {
+  if (!envMats) {
+    envMats = [];
+    scene.traverse(o => {
+      const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
+      for (const m of mats) {
+        if (m.isMeshStandardMaterial && envMats.indexOf(m) === -1) {
+          m.userData._baseEnvInt = m.envMapIntensity;
+          envMats.push(m);
+        }
+      }
+    });
+  }
+  for (const m of envMats) m.envMapIntensity = m.userData._baseEnvInt * factor;
+}
+
+// Applies a named preset by mutating the shared scene objects. References
+// setHeadlights / ui, which are defined further down but only invoked at runtime
+// (first call comes from startRace()), so the forward references resolve fine.
+function applyWeather(name) {
+  const p = WEATHER_PRESETS[name];
+  scene.background.set(p.bg);
+  scene.fog.color.set(p.fogColor);
+  scene.fog.near = p.fogNear;
+  scene.fog.far = p.fogFar;
+  hemi.color.set(p.hemiSky);
+  hemi.groundColor.set(p.hemiGround);
+  hemi.intensity = p.hemiInt;
+  sun.color.set(p.sunColor);
+  sun.intensity = p.sunInt;
+  renderer.toneMappingExposure = p.exposure;
+  scaleEnv(p.envInt);
+  rain.visible = p.rain;
+  setHeadlights(p.night);
+  weather = p;
+  if (ui.weather) ui.weather.textContent = p.label;
+}
+
+// Per-frame rain: positions are absolute world coords. Each drop falls, and once
+// it drops below the camera or drifts out of the surrounding box it respawns at
+// the top of a fresh column around the camera, so the cloud always follows along.
+function updateRain(dt) {
+  const cam = camera.position;
+  const arr = rain.geometry.attributes.position.array;
+  const top = cam.y + RAIN_BOX_Y;
+  const floor = cam.y - 2;
+  for (let i = 0; i < RAIN_COUNT; i++) {
+    const o = i * 3;
+    let x = arr[o], y = arr[o + 1] - dt * RAIN_FALL, z = arr[o + 2];
+    if (y < floor || Math.abs(x - cam.x) > RAIN_BOX_XZ || Math.abs(z - cam.z) > RAIN_BOX_XZ) {
+      x = cam.x + (Math.random() * 2 - 1) * RAIN_BOX_XZ;
+      z = cam.z + (Math.random() * 2 - 1) * RAIN_BOX_XZ;
+      y = top - Math.random() * 4;   // stagger respawns so drops don't fall in a sheet
+    }
+    arr[o] = x; arr[o + 1] = y; arr[o + 2] = z;
+  }
+  rain.geometry.attributes.position.needsUpdate = true;
+}
 
 // ---------------------------------------------------------------- helpers
 function canvasTexture(w, h, draw) {
@@ -585,6 +715,32 @@ const flames = [];
   }
 }
 
+// Night headlights. Two real SpotLights are attached to the *player* group only
+// (kept off body so they don't roll in corners) — the AI's light/shadow budget
+// stays in line with checkPerformance(). Every car's shared lamp materials get an
+// emissive boost so all the lamps glow. Heading 0 faces +Z, so beams aim +Z.
+const playerBeams = [];
+for (const sx of [-0.62, 0.62]) {
+  const beam = new THREE.SpotLight(0xfff1d6, 0, 70, 0.5, 0.4, 1.2);
+  beam.castShadow = false;
+  beam.position.set(sx, 0.7, 2.4);
+  beam.target.position.set(sx, 0.0, 24);
+  beam.visible = false;
+  player.group.add(beam, beam.target);
+  playerBeams.push(beam);
+}
+
+function setHeadlights(on) {
+  for (const car of entrants) {
+    car.lightMat.emissiveIntensity = on ? 2.4 : 1.2;
+    car.tailMat.emissiveIntensity = on ? 1.8 : 0.9;
+  }
+  for (const beam of playerBeams) {
+    beam.visible = on;
+    beam.intensity = on ? 18 : 0;
+  }
+}
+
 function resetItems() {
   for (const pk of pickups) { pk.active = true; pk.respawnT = 0; pk.mesh.visible = true; }
   for (const c of cones) {
@@ -812,6 +968,7 @@ const ui = {
   speed: document.getElementById('speed'),
   nitro: document.getElementById('nitro'),
   count: document.getElementById('count'),
+  weather: document.getElementById('weather'),
   results: document.getElementById('results'),
   resTitle: document.getElementById('resTitle'),
   resTable: document.getElementById('resTable'),
@@ -826,6 +983,9 @@ function fmtTime(t) {
 }
 
 function startRace() {
+  // Cycle weather deterministically so every preset is reachable and tests are stable.
+  weatherIdx = (weatherIdx + 1) % PRESET_NAMES.length;
+  applyWeather(PRESET_NAMES[weatherIdx]);
   placeOnGrid();
   resetItems();
   finishOrder = [];
@@ -917,7 +1077,8 @@ function updatePlayer(dt) {
   fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), 0.9 * dt);
 
   // lateral grip (low while handbraking → drift; near zero on oil)
-  const grip = p.slickT > 0 ? 1.0 : handbrake ? 1.6 : (onTrack ? 7.5 : 3.2);
+  // wet weather lowers grip (looser car); oil keeps its own fixed value.
+  const grip = p.slickT > 0 ? 1.0 : (handbrake ? 1.6 : (onTrack ? 7.5 : 3.2)) * weather.gripMul;
   _lat.multiplyScalar(Math.exp(-grip * dt));
 
   p.vel.copy(_fwd).multiplyScalar(fwdSpeed).add(_lat);
@@ -1147,6 +1308,7 @@ function frame(t) {
   for (const ai of ais) updateAI(ai, dt);
   updateItems(dt);
   updateCamera(dt, fwdSpeed);
+  if (weather.rain && qualityLevel < 2) updateRain(dt);
   updateHUD(fwdSpeed);
   drawMinimap();
   renderer.render(scene, camera);
@@ -1160,4 +1322,6 @@ window.__vc = {
   player, ais, entrants, samples, keys, N, trackLen,
   pickups, slicks, cones,
   get state() { return state; },
+  get weather() { return weather.label; },
+  restart: () => startRace(),
 };
